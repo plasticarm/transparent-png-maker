@@ -1,23 +1,30 @@
 import requests
 
-# Replace with the URL Render gave you
-url = "https://transparent-png-maker.onrender.com/" 
+# REPLACE THIS with your actual Render URL
+url = "https://transparent-png-maker.onrender.com/process-image" 
 
-# Use a local image to test
-files = {'image': open('test_image.jpg', 'rb')}
-data = {
-    'hex_color': '#00FF00', 
-    'tolerance': '40',
-    'choke_pixels': '1', 
-    'feather_pixels': '2'
-}
+# Create a dummy image or use a real one (make sure 'test.jpg' exists in your folder)
+try:
+    # We'll assume you have a file named 'test.jpg' or change this to a file you have
+    files = {'image': open('G:/WebApps/transparent-png-maker/test.jpg', 'rb')} 
+    
+    data = {
+        'hex_color': '#00FF00', 
+        'tolerance': '30'
+    }
 
-print("Sending image...")
-response = requests.post(url, files=files, data=data)
+    print(f"Pinging {url}...")
+    response = requests.post(url, files=files, data=data)
 
-if response.status_code == 200:
-    with open('result.png', 'wb') as f:
-        f.write(response.content)
-    print("Success! 'result.png' saved.")
-else:
-    print(f"Error: {response.text}")
+    if response.status_code == 200:
+        print("✅ SUCCESS! The server accepted the image.")
+        print(f"Received {len(response.content)} bytes back.")
+        with open('success_alpha.png', 'wb') as f:
+            f.write(response.content)
+            print("Saved 'success_alpha.png'")
+    else:
+        print(f"❌ ERROR {response.status_code}")
+        print(f"Server said: {response.text}")
+
+except FileNotFoundError:
+    print("⚠️ make sure you have a 'test.jpg' file in this folder to send!")
