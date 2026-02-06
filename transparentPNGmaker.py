@@ -1,59 +1,61 @@
-import streamlit as st
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.responses import Response
 import cv2
 import numpy as np
-from PIL import Image
-import io
 
-st.set_page_config(page_title="Alpha Channel Generator", layout="centered")
+app = FastAPI()
 
-st.title("🖼️ Color to Alpha Converter")
-st.write("Upload an image and select a color to turn transparent.")
+@app.post("/process-image")
+async def process_image(
+    image: UploadFile = File(...),
+    hex_color: str = Form("#00FF00"),
+    tolerance: int = Form(30),
+    choke_pixels: int = Form(0),   # New: Shrinks the mask to remove halos
+    feather_pixels: int = Form(0)  # New: Softens the edges
+):
+    # 1. Read and Decode Image
+    contents = await image.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-# 1. Sidebar Controls
-with st.sidebar:
-    st.header("Settings")
-    target_color = st.color_picker("Color to remove", "#00FF00")
-    tolerance = st.slider("Tolerance", 1, 100, 30)
-    
-    # Convert hex to BGR (OpenCV format)
-    hex_color = target_color.lstrip('#')
-    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    # 2. Process Target Color
+    hex_val = hex_color.lstrip('#')
+    rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
     target_bgr = np.array([rgb[2], rgb[1], rgb[0]])
 
-# 2. File Uploader
-uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
-
-if uploaded_file is not None:
-    # Convert uploaded file to OpenCV format
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    
-    # Create the Alpha Mask
-    # Calculate distance from target color
+    # 3. Create Initial Alpha Mask
+    # Calculate difference from target color
     diff = np.sqrt(np.sum((img - target_bgr)**2, axis=2))
-    
-    # Create a mask: 0 where color matches (transparent), 255 elsewhere (opaque)
+    # Create binary mask: 255 = Subject (Keep), 0 = Background (Remove)
     mask = np.where(diff < tolerance, 0, 255).astype(np.uint8)
-    
-    # Add alpha channel to image
-    b, g, r = cv2.split(img)
-    rgba = cv2.merge([b, g, r, mask])
-    
-    # Display results
-    col1, col2 = st.columns(2)
-    with col1:
-        st.image(uploaded_file, caption="Original")
-    with col2:
-        # Convert to PIL for Streamlit display
-        result_img = Image.fromarray(cv2.cvtColor(rgba, cv2.COLOR_BGRA2RGBA))
-        st.image(result_img, caption="Result (Alpha Applied)")
 
-    # 3. Download Button
-    buf = io.BytesIO()
-    result_img.save(buf, format="PNG")
-    st.download_button(
-        label="Download PNG with Alpha",
-        data=buf.getvalue(),
-        file_name="alpha_result.png",
-        mime="image/png"
-    )
+    # --- ADVANCED PROCESSING ---
+
+    # 4. Apply Choke (Erosion)
+    # Shrinks the white area (subject) to cut off green edges
+    if choke_pixels > 0:
+        kernel_size = 2 * choke_pixels + 1
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        mask = cv2.erode(mask, kernel, iterations=1)
+
+    # 5. Apply Feather (Gaussian Blur)
+    # Softens the transition between opaque and transparent
+    if feather_pixels > 0:
+        # Convert to float to allow smooth gradients
+        mask = mask.astype(np.float32)
+        # Sigma is calculated from pixels roughly (sigma = x * 0.3 + 0.8) or just let OpenCV calc it
+        blur_size = 2 * feather_pixels + 1
+        mask = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
+        # Normalize back to 0-255 range if needed, but OpenCV handles float masks well usually.
+        # For strict PNG compliance, let's cast back carefully
+        mask = np.clip(mask, 0, 255).astype(np.uint8)
+
+    # ---------------------------
+
+    # 6. Merge & Encode
+    b, g, r = cv2.split(img)
+    # If using feather, the mask is now grayscale (0-255), creating semi-transparency
+    rgba = cv2.merge([b, g, r, mask])
+
+    _, encoded_img = cv2.imencode('.png', rgba)
+    return Response(content=encoded_img.tobytes(), media_type="image/png")
